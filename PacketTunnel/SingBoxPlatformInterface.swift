@@ -14,9 +14,11 @@ public class SingBoxPlatformInterface: NSObject,
     private weak var tunnel: PacketTunnelProvider?
     private var networkSettings: NEPacketTunnelNetworkSettings?
     private var nwMonitor: NWPathMonitor?
+    private let serverAddress: String  // proxy server host, excluded from TUN routes
 
-    init(tunnel: PacketTunnelProvider) {
+    init(tunnel: PacketTunnelProvider, serverAddress: String) {
         self.tunnel = tunnel
+        self.serverAddress = serverAddress
     }
 
     // MARK: - TUN
@@ -34,7 +36,14 @@ public class SingBoxPlatformInterface: NSObject,
         guard let ret0_ else { throw makeError("nil return pointer") }
         guard let tunnel else { throw makeError("tunnel deallocated") }
 
-        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
+        // Resolve the proxy server address to an IP for tunnelRemoteAddress.
+        // tunnelRemoteAddress tells iOS which address is the "VPN server" so it
+        // gets excluded from TUN routing — this prevents the routing loop.
+        let resolvedIPs = SingBoxPlatformInterface.resolveHost(serverAddress)
+        let tunnelRemote = resolvedIPs.first(where: { !$0.contains(":") }) ?? resolvedIPs.first ?? serverAddress
+        NSLog("[Platform] tunnelRemoteAddress = %@ (resolved from %@)", tunnelRemote, serverAddress)
+
+        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: tunnelRemote)
         settings.mtu = NSNumber(value: options.getMTU())
 
         // DNS
@@ -60,7 +69,7 @@ public class SingBoxPlatformInterface: NSObject,
         let ipv4 = NEIPv4Settings(addresses: ipv4Addr, subnetMasks: ipv4Mask)
         ipv4.includedRoutes = [NEIPv4Route.default()]
 
-        // Exclude routes
+        // Exclude routes from sing-box
         var excludedRoutes: [NEIPv4Route] = []
         if let iter = options.getInet4RouteExcludeAddress() {
             while iter.hasNext() {
@@ -72,6 +81,30 @@ public class SingBoxPlatformInterface: NSObject,
                 }
             }
         }
+
+        // Exclude proxy server IP from TUN routes to prevent routing loop.
+        // Without this, the MuxTunnel socket's traffic loops back through TUN
+        // and never reaches the real server.
+        var excludedIPv6Routes: [NEIPv6Route] = []
+        for ip in resolvedIPs {
+            if ip.contains(":") {
+                // IPv6
+                excludedIPv6Routes.append(
+                    NEIPv6Route(destinationAddress: ip, networkPrefixLength: 128)
+                )
+                NSLog("[Platform] excluding IPv6 server route: %@/128", ip)
+            } else {
+                // IPv4
+                excludedRoutes.append(
+                    NEIPv4Route(destinationAddress: ip, subnetMask: "255.255.255.255")
+                )
+                NSLog("[Platform] excluding IPv4 server route: %@/32", ip)
+            }
+        }
+        if resolvedIPs.isEmpty {
+            NSLog("[Platform] WARNING: could not resolve server address '%@', route exclusion skipped", serverAddress)
+        }
+
         ipv4.excludedRoutes = excludedRoutes
         settings.ipv4Settings = ipv4
 
@@ -86,10 +119,15 @@ public class SingBoxPlatformInterface: NSObject,
                 }
             }
         }
-        if !ipv6Addr.isEmpty {
-            let ipv6 = NEIPv6Settings(addresses: ipv6Addr,
-                                       networkPrefixLengths: ipv6Prefix)
+        if !ipv6Addr.isEmpty || !excludedIPv6Routes.isEmpty {
+            let finalAddrs = ipv6Addr.isEmpty ? ["fd00::1"] : ipv6Addr
+            let finalPrefixes = ipv6Prefix.isEmpty ? [NSNumber(value: 128)] : ipv6Prefix
+            let ipv6 = NEIPv6Settings(addresses: finalAddrs,
+                                       networkPrefixLengths: finalPrefixes)
             ipv6.includedRoutes = [NEIPv6Route.default()]
+            if !excludedIPv6Routes.isEmpty {
+                ipv6.excludedRoutes = excludedIPv6Routes
+            }
             settings.ipv6Settings = ipv6
         }
 
@@ -235,6 +273,49 @@ public class SingBoxPlatformInterface: NSObject,
 
     private func makeError(_ msg: String) -> NSError {
         NSError(domain: "SimpleProxyPlatform", code: 0, userInfo: [NSLocalizedDescriptionKey: msg])
+    }
+
+    /// Resolve a hostname to all its IP addresses (IPv4 and IPv6).
+    private static func resolveHost(_ host: String) -> [String] {
+        var results: [String] = []
+
+        // Check if it's already an IP address
+        var addr4 = in_addr()
+        var addr6 = in6_addr()
+        if inet_pton(AF_INET, host, &addr4) == 1 {
+            return [host]
+        }
+        if inet_pton(AF_INET6, host, &addr6) == 1 {
+            return [host]
+        }
+
+        // DNS resolution
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+        hints.ai_socktype = SOCK_STREAM
+
+        var result: UnsafeMutablePointer<addrinfo>?
+        let rc = getaddrinfo(host, nil, &hints, &result)
+        guard rc == 0, let addrInfo = result else {
+            NSLog("[Platform] resolveHost failed for '%@': %d", host, rc)
+            return []
+        }
+        defer { freeaddrinfo(result) }
+
+        var ptr: UnsafeMutablePointer<addrinfo>? = addrInfo
+        while let ai = ptr {
+            var hostBuf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            if getnameinfo(ai.pointee.ai_addr, ai.pointee.ai_addrlen,
+                           &hostBuf, socklen_t(hostBuf.count),
+                           nil, 0, NI_NUMERICHOST) == 0 {
+                let ipStr = String(cString: hostBuf)
+                if !results.contains(ipStr) {
+                    results.append(ipStr)
+                }
+            }
+            ptr = ai.pointee.ai_next
+        }
+        return results
     }
 
     // MARK: - Interface iterator

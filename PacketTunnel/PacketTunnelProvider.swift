@@ -32,6 +32,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         let routingMode = (config["routingMode"] as? String) ?? "global"
         NSLog("[PacketTunnel] node: %@:%d  routingMode: %@", host, port, routingMode)
+        debugLog("[PacketTunnel] startTunnel: host=\(host) port=\(port) routingMode=\(routingMode) keyLen=\(keyHex.count)")
 
         // ── 2. Setup Libbox paths ──
         LibboxClearServiceError()
@@ -40,9 +41,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let container = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: "group.app.rork.simple-proxy-client"
         )!
-        let basePath = container.appendingPathComponent("singbox")
-        let workPath = basePath.appendingPathComponent("work")
-        let tmpPath  = basePath.appendingPathComponent("tmp")
+
+        // basePath is where Libbox creates command.sock (Unix domain socket).
+        // Unix sockets have a path limit (~104 chars), so we use the shorter
+        // NSTemporaryDirectory instead of the app group container.
+        let basePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("sb")
+        let workPath = container.appendingPathComponent("singbox")
+            .appendingPathComponent("work")
+        let tmpPath  = container.appendingPathComponent("singbox")
+            .appendingPathComponent("tmp")
 
         for dir in [basePath, workPath, tmpPath] {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -57,15 +65,31 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         if let err = setupErr {
             throw tunnelError("Libbox setup: \(err.localizedDescription)")
         }
+        debugLog("[PacketTunnel] Libbox setup OK, basePath=\(basePath.path)")
 
         // ── 3. Start SimpleProtocol SOCKS5 bridge ──
         bridge = SimpleProtocolBridge(remoteHost: host, remotePort: port, psk: pskData)
-        try bridge?.start(port: 16080)
+        do {
+            try bridge?.start(port: 16080)
+            debugLog("[PacketTunnel] Bridge started on 127.0.0.1:16080")
+        } catch {
+            debugLog("[PacketTunnel] Bridge start FAILED: \(error)")
+            throw error
+        }
 
         // ── 4. Create platform interface & command server ──
-        platformInterface = SingBoxPlatformInterface(tunnel: self)
+        platformInterface = SingBoxPlatformInterface(tunnel: self, serverAddress: host)
         commandServer = LibboxNewCommandServer(platformInterface, 300)
-        try commandServer?.start()
+        do {
+            try commandServer?.start()
+            debugLog("[PacketTunnel] Command server started")
+        } catch {
+            // Command server is only for status messages, not essential for VPN.
+            // On iOS the Unix socket path is too long (>104 chars), so this always
+            // fails. Log and continue — the tunnel will still work without it.
+            debugLog("[PacketTunnel] Command server start failed (non-fatal): \(error.localizedDescription)")
+            commandServer = nil
+        }
 
         // ── 5. Generate sing-box config and start service ──
         let configJSON = SingBoxConfigBuilder.build(
@@ -73,21 +97,31 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             bridgePort: 16080,
             workDir: workPath
         )
+        debugLog("[PacketTunnel] sing-box config generated (\(configJSON.count) bytes)")
 
         var serviceErr: NSError?
         let service = LibboxNewService(configJSON, platformInterface, &serviceErr)
         if let err = serviceErr {
+            debugLog("[PacketTunnel] Libbox service create FAILED: \(err)")
             throw tunnelError("Libbox service create: \(err.localizedDescription)")
         }
         guard let service else {
+            debugLog("[PacketTunnel] Libbox service is nil")
             throw tunnelError("Libbox service is nil")
         }
 
-        try service.start()
+        do {
+            try service.start()
+            debugLog("[PacketTunnel] sing-box service started OK")
+        } catch {
+            debugLog("[PacketTunnel] sing-box service start FAILED: \(error)")
+            throw error
+        }
         commandServer?.setService(service)
         boxService = service
 
         NSLog("[PacketTunnel] started successfully")
+        debugLog("[PacketTunnel] ✅ started successfully")
     }
 
     override func stopTunnel(with reason: NEProviderStopReason) async {
@@ -144,5 +178,23 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             chars.removeFirst(2)
         }
         return data
+    }
+
+    /// Write debug info to a file in the shared container for post-mortem debugging.
+    private func debugLog(_ message: String) {
+        NSLog("%@", message)
+        let ts = ISO8601DateFormatter().string(from: Date())
+        let line = "[\(ts)] \(message)\n"
+        guard let container = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "group.app.rork.simple-proxy-client"
+        ) else { return }
+        let logFile = container.appendingPathComponent("tunnel_debug.log")
+        if let handle = try? FileHandle(forWritingTo: logFile) {
+            handle.seekToEndOfFile()
+            if let data = line.data(using: .utf8) { handle.write(data) }
+            handle.closeFile()
+        } else {
+            try? line.write(to: logFile, atomically: true, encoding: .utf8)
+        }
     }
 }

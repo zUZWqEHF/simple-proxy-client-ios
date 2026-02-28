@@ -33,7 +33,7 @@ enum SingBoxConfigBuilder {
         ]
 
         // ── DNS ──
-        var dnsServers: [[String: Any]] = [
+        let dnsServers: [[String: Any]] = [
             [
                 "tag": "remote-dns",
                 "address": "tcp://8.8.8.8",
