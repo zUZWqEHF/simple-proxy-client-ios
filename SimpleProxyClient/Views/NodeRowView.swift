@@ -4,6 +4,7 @@ struct NodeRowView: View {
     let node: ProxyNode
     let isSelected: Bool
     let onSelect: () -> Void
+    let onEdit: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
@@ -40,6 +41,10 @@ struct NodeRowView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            Button(action: onEdit) {
+                Label("Edit", systemImage: "pencil")
+            }
+
             Button {
                 UIPasteboard.general.string = NodeParser.generateURI(for: node)
             } label: {

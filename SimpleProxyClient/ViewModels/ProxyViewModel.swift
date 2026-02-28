@@ -6,6 +6,8 @@ final class ProxyViewModel {
     var selectedNodeId: UUID?
     var routingMode: RoutingMode = .global
     var showAddNode = false
+    var showEditNode = false
+    var editingNode: ProxyNode?
     var showError = false
     var errorMessage = ""
 
@@ -36,6 +38,18 @@ final class ProxyViewModel {
         nodes.removeAll { $0.id == node.id }
         if selectedNodeId == node.id { selectedNodeId = nodes.first?.id }
         save()
+    }
+
+    func updateNode(_ node: ProxyNode) {
+        if let idx = nodes.firstIndex(where: { $0.id == node.id }) {
+            nodes[idx] = node
+            save()
+        }
+    }
+
+    func editNode(_ node: ProxyNode) {
+        editingNode = node
+        showEditNode = true
     }
 
     func deleteNodes(at offsets: IndexSet) {

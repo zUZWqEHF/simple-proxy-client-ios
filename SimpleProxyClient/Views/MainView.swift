@@ -34,6 +34,11 @@ struct MainView: View {
             .sheet(isPresented: $viewModel.showAddNode) {
                 AddNodeView(viewModel: viewModel)
             }
+            .sheet(isPresented: $viewModel.showEditNode) {
+                if let node = viewModel.editingNode {
+                    AddNodeView(viewModel: viewModel, editingNode: node)
+                }
+            }
             .alert("Error", isPresented: $viewModel.showError) {
                 Button("OK") {}
             } message: {
@@ -114,6 +119,7 @@ struct MainView: View {
                             node: node,
                             isSelected: node.id == viewModel.selectedNodeId,
                             onSelect: { viewModel.selectNode(node) },
+                            onEdit: { viewModel.editNode(node) },
                             onDelete: { viewModel.deleteNode(node) }
                         )
                     }

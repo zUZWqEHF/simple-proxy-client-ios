@@ -54,14 +54,11 @@ final class MuxTunnel {
 
     /// Connect to the remote server, perform handshake, enter mux mode.
     func connect() throws {
-        NSLog("[MuxTunnel] connecting to %@:%d", remoteHost, remotePort)
         try openSocket()
-        NSLog("[MuxTunnel] socket connected, performing handshake")
         try performHandshake()
         // Send mux init frame: [0x00=mux] [version=1] [reserved 2B]
         try writeFrameInternal(Data([0x00, 0x01, 0x00, 0x00]))
         startReader()
-        NSLog("[MuxTunnel] mux mode active")
     }
 
     /// Open a new multiplexed stream to a SOCKS5-style target address.

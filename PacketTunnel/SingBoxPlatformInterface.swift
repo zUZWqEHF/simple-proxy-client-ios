@@ -41,7 +41,6 @@ public class SingBoxPlatformInterface: NSObject,
         // gets excluded from TUN routing — this prevents the routing loop.
         let resolvedIPs = SingBoxPlatformInterface.resolveHost(serverAddress)
         let tunnelRemote = resolvedIPs.first(where: { !$0.contains(":") }) ?? resolvedIPs.first ?? serverAddress
-        NSLog("[Platform] tunnelRemoteAddress = %@ (resolved from %@)", tunnelRemote, serverAddress)
 
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: tunnelRemote)
         settings.mtu = NSNumber(value: options.getMTU())
@@ -88,17 +87,13 @@ public class SingBoxPlatformInterface: NSObject,
         var excludedIPv6Routes: [NEIPv6Route] = []
         for ip in resolvedIPs {
             if ip.contains(":") {
-                // IPv6
                 excludedIPv6Routes.append(
                     NEIPv6Route(destinationAddress: ip, networkPrefixLength: 128)
                 )
-                NSLog("[Platform] excluding IPv6 server route: %@/128", ip)
             } else {
-                // IPv4
                 excludedRoutes.append(
                     NEIPv4Route(destinationAddress: ip, subnetMask: "255.255.255.255")
                 )
-                NSLog("[Platform] excluding IPv4 server route: %@/32", ip)
             }
         }
         if resolvedIPs.isEmpty {

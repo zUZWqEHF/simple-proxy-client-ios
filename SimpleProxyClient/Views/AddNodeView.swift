@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AddNodeView: View {
     let viewModel: ProxyViewModel
+    var editingNode: ProxyNode? = nil
     @Environment(\.dismiss) private var dismiss
 
     @State private var selectedTab = 0
@@ -11,33 +12,43 @@ struct AddNodeView: View {
     @State private var name = ""
     @State private var host = ""
     @State private var port = ""
-    @State private var protocolType: ProxyProtocolType = .shadowsocks
-    @State private var cipher: ShadowsocksCipher = .aes256Gcm
-    @State private var password = ""
     @State private var spKey = ""
+
+    private var isEditing: Bool { editingNode != nil }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                Picker("Method", selection: $selectedTab) {
-                    Text("Scan QR").tag(0)
-                    Text("Manual").tag(1)
+                if !isEditing {
+                    Picker("Method", selection: $selectedTab) {
+                        Text("Scan QR").tag(0)
+                        Text("Manual").tag(1)
+                    }
+                    .pickerStyle(.segmented)
+                    .padding()
                 }
-                .pickerStyle(.segmented)
-                .padding()
 
-                if selectedTab == 0 {
-                    scanTab
-                } else {
+                if isEditing || selectedTab == 1 {
                     manualTab
+                } else {
+                    scanTab
                 }
             }
             .background(Color(.systemGroupedBackground))
-            .navigationTitle("Add Node")
+            .navigationTitle(isEditing ? "Edit Node" : "Add Node")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                }
+            }
+            .onAppear {
+                if let node = editingNode {
+                    name = node.name
+                    host = node.host
+                    port = String(node.port)
+                    spKey = node.spKey ?? ""
+                    selectedTab = 1
                 }
             }
         }
@@ -62,7 +73,7 @@ struct AddNodeView: View {
                     .foregroundStyle(.secondary)
 
                 HStack(spacing: 8) {
-                    TextField("ss:// or simple://", text: $uriText)
+                    TextField("simple://", text: $uriText)
                         .font(.system(.subheadline, design: .monospaced))
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
@@ -100,7 +111,7 @@ struct AddNodeView: View {
         .alert("Invalid URI", isPresented: $parseError) {
             Button("OK") {}
         } message: {
-            Text("Could not parse the URI. Supported formats:\nss://… or simple://…")
+            Text("Could not parse the URI.\nSupported format: simple://…")
         }
     }
 
@@ -116,33 +127,16 @@ struct AddNodeView: View {
                     .keyboardType(.numberPad)
             }
 
-            Section("Protocol") {
-                Picker("Type", selection: $protocolType) {
-                    ForEach(ProxyProtocolType.allCases) { type in
-                        Text(type.displayName).tag(type)
-                    }
-                }
-
-                if protocolType == .shadowsocks {
-                    Picker("Cipher", selection: $cipher) {
-                        ForEach(ShadowsocksCipher.allCases) { c in
-                            Text(c.rawValue).tag(c)
-                        }
-                    }
-                    SecureField("Password", text: $password)
-                }
-
-                if protocolType == .simpleProtocol {
-                    TextField("Pre-shared Key (64 hex)", text: $spKey)
-                        .font(.system(.body, design: .monospaced))
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                }
+            Section("SimpleProtocol") {
+                TextField("Pre-shared Key (64 hex)", text: $spKey)
+                    .font(.system(.body, design: .monospaced))
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
             }
 
             Section {
-                Button("Add Node") {
-                    addManualNode()
+                Button(isEditing ? "Save" : "Add Node") {
+                    saveNode()
                 }
                 .frame(maxWidth: .infinity)
                 .disabled(!isFormValid)
@@ -153,27 +147,25 @@ struct AddNodeView: View {
     private var isFormValid: Bool {
         guard !host.trimmingCharacters(in: .whitespaces).isEmpty,
               let p = Int(port), p > 0, p < 65536 else { return false }
-        switch protocolType {
-        case .shadowsocks:
-            return !password.isEmpty
-        case .simpleProtocol:
-            return spKey.count == 64 && CryptoService.hexToData(spKey) != nil
-        }
+        return spKey.count == 64 && CryptoService.hexToData(spKey) != nil
     }
 
-    private func addManualNode() {
+    private func saveNode() {
         guard let portNum = Int(port) else { return }
         let nodeName = name.trimmingCharacters(in: .whitespaces).isEmpty ? host : name
         let node = ProxyNode(
+            id: editingNode?.id ?? UUID(),
             name: nodeName,
             host: host.trimmingCharacters(in: .whitespaces),
             port: portNum,
-            protocolType: protocolType,
-            ssCipher: protocolType == .shadowsocks ? cipher : nil,
-            ssPassword: protocolType == .shadowsocks ? password : nil,
-            spKey: protocolType == .simpleProtocol ? spKey : nil
+            protocolType: .simpleProtocol,
+            spKey: spKey
         )
-        viewModel.addNode(node)
+        if isEditing {
+            viewModel.updateNode(node)
+        } else {
+            viewModel.addNode(node)
+        }
         dismiss()
     }
 }
