@@ -171,6 +171,7 @@
 				105FC5762E9EAD3100EA8BCF /* Sources */,
 				105FC5772E9EAD3100EA8BCF /* Frameworks */,
 				105FC5782E9EAD3100EA8BCF /* Resources */,
+				AA000005AAAA000000000001 /* Embed Frameworks */,
 				AA000004AAAA000000000001 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
@@ -241,7 +242,6 @@
 				AA000009AAAA000000000001 /* Sources */,
 				AA000007AAAA000000000001 /* Frameworks */,
 				AA00000AAAAA000000000001 /* Resources */,
-				AA000005AAAA000000000001 /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
